@@ -1,0 +1,33 @@
+{
+  "name": "screeps-mission-control",
+  "version": "1.0.0",
+  "description": "Mission Control dashboard for Screeps - Aviation-inspired HUD with real-time telemetry",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "nodemon server/index.js",
+    "test": "echo \"No tests yet\" && exit 0"
+  },
+  "keywords": [
+    "screeps",
+    "dashboard",
+    "mission-control",
+    "telemetry",
+    "hud"
+  ],
+  "author": "Pat Snyder",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.6.1",
+    "screeps-api": "^1.9.0",
+    "dotenv": "^16.3.1",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

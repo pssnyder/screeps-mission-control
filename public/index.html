@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Screeps Mission Control</title>
+    <link rel="stylesheet" href="/css/mission-control.css">
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <!-- Main HUD Container -->
+    <div class="mission-control">
+        <!-- Header Bar -->
+        <header class="hud-header">
+            <div class="logo">
+                <span class="logo-icon">⬡</span>
+                <h1>SCREEPS MISSION CONTROL</h1>
+            </div>
+            <div class="connection-status">
+                <span class="status-indicator" id="connection-status"></span>
+                <span id="connection-text">CONNECTING...</span>
+                <span id="cache-status" class="cache-status" style="display: none; margin-left: 15px; font-size: 11px; color: #ffc700;"></span>
+            </div>
+            <div class="timestamp" id="timestamp">--:--:--</div>
+        </header>
+
+        <!-- Main Dashboard Grid -->
+        <div class="hud-grid">
+            <!-- Left Column: Telemetry Gauges -->
+            <section class="panel gauges-panel">
+                <h2 class="panel-title">TELEMETRY</h2>
+                
+                <div class="gauge-container">
+                    <div class="gauge" data-tooltip="CPU usage per tick. Yellow at 70%, red at 90%. If consistently over limit, optimize code.">
+                        <canvas id="gauge-cpu" width="200" height="200"></canvas>
+                        <div class="gauge-label">
+                            <span class="gauge-value" id="cpu-value">0</span>
+                            <span class="gauge-unit">CPU</span>
+                        </div>
+                        <div class="gauge-description">Per-tick processing</div>
+                    </div>
+                    
+                    <div class="gauge" data-tooltip="CPU bucket reserves. Accumulates when CPU < limit. Used for burst processing. Critical below 1000.">
+                        <canvas id="gauge-bucket" width="200" height="200"></canvas>
+                        <div class="gauge-label">
+                            <span class="gauge-value" id="bucket-value">0</span>
+                            <span class="gauge-unit">BUCKET</span>
+                        </div>
+                        <div class="gauge-description">CPU reserve pool</div>
+                    </div>
+                    
+                    <div class="gauge" data-tooltip="Energy available in spawn + extensions. Used for spawning creeps. Updates every 100 ticks.">
+                        <canvas id="gauge-energy" width="200" height="200"></canvas>
+                        <div class="gauge-label">
+                            <span class="gauge-value" id="energy-value">0</span>
+                            <span class="gauge-unit">ENERGY</span>
+                        </div>
+                        <div class="gauge-description">Spawn capacity</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Center Column: Status & Info -->
+            <section class="panel status-panel">
+                <h2 class="panel-title">COLONY STATUS</h2>
+                
+                <div class="status-grid">
+                    <div class="status-item" data-tooltip="Your primary room coordinate">
+                        <span class="status-label">ROOM</span>
+                        <span class="status-value" id="room-name">--</span>
+                    </div>
+                    <div class="status-item" data-tooltip="Room Control Level (1-8). Higher RCL unlocks more structures and features.">
+                        <span class="status-label">RCL</span>
+                        <span class="status-value" id="rcl-level">0</span>
+                    </div>
+                    <div class="status-item" data-tooltip="Progress to next RCL. Upgraders increase this by working on the controller.">
+                        <span class="status-label">PROGRESS</span>
+                        <span class="status-value" id="rcl-progress">0%</span>
+                    </div>
+                    <div class="status-item" data-tooltip="Total creeps alive in this room">
+                        <span class="status-label">CREEPS</span>
+                        <span class="status-value" id="creep-count">0</span>
+                    </div>
+                    <div class="status-item" data-tooltip="Spawns create new creeps. Max 1 at RCL 1-6, 2 at RCL 7, 3 at RCL 8.">
+                        <span class="status-label">SPAWNS</span>
+                        <span class="status-value" id="spawn-count">0</span>
+                    </div>
+                    <div class="status-item" data-tooltip="Extensions store energy for spawning. Each adds 50 energy capacity.">
+                        <span class="status-label">EXTENSIONS</span>
+                        <span class="status-value" id="ext-count">0</span>
+                    </div>
+                    <div class="status-item" data-tooltip="Towers provide automated defense, healing, and repairs. Unlocked at RCL 3.">
+                        <span class="status-label">TOWERS</span>
+                        <span class="status-value" id="tower-count">0</span>
+                    </div>
+                    <div class="status-item" data-tooltip="Screeps Engine version running in-game">
+                        <span class="status-label">VERSION</span>
+                        <span class="status-value" id="engine-version">--</span>
+                    </div>
+                </div>
+
+                <div class="creep-roster" data-tooltip="Active creeps by role. Harvesters collect energy, Upgraders level RCL, Builders construct, Haulers transport.">
+                    <h3>CREEP ROSTER</h3>
+                    <div id="creep-roster-content" class="roster-grid">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+
+                <div class="construction-status" data-tooltip="Active construction sites. Structure planner runs every 100 ticks to place new sites.">
+                    <h3>CONSTRUCTION</h3>
+                    <div id="construction-content" class="construction-grid">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Column: Graphs & Charts -->
+            <section class="panel charts-panel">
+                <h2 class="panel-title">PERFORMANCE</h2>
+                
+                <div class="chart-container">
+                    <canvas id="chart-cpu"></canvas>
+                </div>
+                
+                <div class="chart-container">
+                    <canvas id="chart-energy"></canvas>
+                </div>
+            </section>
+        </div>
+
+        <!-- Bottom: Command Console -->
+        <section class="panel console-panel">
+            <h2 class="panel-title">COMMAND CONSOLE</h2>
+            <div class="console-container">
+                <div class="console-output" id="console-output">
+                    <div class="console-line system">MISSION CONTROL INITIALIZED</div>
+                    <div class="console-line system">Ready for commands...</div>
+                </div>
+                <div class="console-input-container">
+                    <span class="console-prompt">&gt;</span>
+                    <input type="text" id="console-input" class="console-input" placeholder="Enter command (e.g., status(), debug(), profile())">
+                    <button id="console-send" class="console-button">SEND</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Alert Bar (shows warnings) -->
+        <div class="alert-bar" id="alert-bar" style="display: none;">
+            <span class="alert-icon">⚠️</span>
+            <span id="alert-message"></span>
+        </div>
+
+        <!-- Wiki Button (floating) -->
+        <button class="wiki-toggle" id="wiki-toggle" title="Command Reference">
+            📚 WIKI
+        </button>
+
+        <!-- Wiki Modal Overlay -->
+        <div class="wiki-modal" id="wiki-modal" style="display: none;">
+            <div class="wiki-modal-content">
+                <div class="wiki-modal-header">
+                    <h2>📚 CONSOLE COMMAND REFERENCE</h2>
+                    <button class="wiki-close" id="wiki-close">✕</button>
+                </div>
+                <div class="wiki-modal-body">
+                    <div class="wiki-sidebar">
+                        <div class="wiki-category active" data-category="status">📊 Status & Info</div>
+                        <div class="wiki-category" data-category="spawning">🚀 Spawning</div>
+                        <div class="wiki-category" data-category="testing">🧪 Testing & Analytics</div>
+                        <div class="wiki-category" data-category="debug">🔧 Debug & Admin</div>
+                        <div class="wiki-category" data-category="memory">💾 Memory Management</div>
+                    </div>
+                    <div class="wiki-content" id="wiki-content">
+                        <!-- Content populated by wiki.js -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/js/gauges.js"></script>
+    <script src="/js/graphs.js"></script>
+    <script src="/js/websocket.js"></script>
+    <script src="/js/wiki.js"></script>
+    <script src="/js/app.js"></script>
+</body>
+</html>
