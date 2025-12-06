@@ -1,0 +1,465 @@
+/**
+ * SCREEPS MISSION CONTROL - Cloud Functions v2
+ * 
+ * Firebase Cloud Functions for backend operations:
+ * - Daily analytics collection
+ * - Screeps API integration
+ * - AI chat with Claude
+ * - GitHub integration
+ */
+
+const { onRequest } = require('firebase-functions/v2/https');
+const { onSchedule } = require('firebase-functions/v2/scheduler');
+const { defineSecret } = require('firebase-functions/params');
+const admin = require('firebase-admin');
+const ScreepsAPI = require('screeps-api');
+const Anthropic = require('@anthropic-ai/sdk');
+const { Octokit } = require('@octokit/rest');
+const cors = require('cors')({ origin: true });
+
+admin.initializeApp();
+const db = admin.firestore();
+
+// Define secrets (automatically managed by Firebase)
+const SCREEPS_TOKEN = defineSecret('SCREEPS_TOKEN');
+const GITHUB_PAT = defineSecret('GITHUB_PAT');
+const CLAUDE_API_KEY = defineSecret('CLAUDE_API_KEY');
+
+// ============================================================================
+// DAILY ANALYTICS COLLECTION
+// ============================================================================
+
+/**
+ * Collect daily telemetry from Screeps
+ * Scheduled: 0 2 * * * (2 AM daily, America/New_York)
+ */
+exports.collectDailyTelemetry = onSchedule({
+  schedule: '0 2 * * *',
+  timeZone: 'America/New_York',
+  secrets: [SCREEPS_TOKEN]
+}, async (event) => {
+  try {
+    const api = new ScreepsAPI({ token: SCREEPS_TOKEN.value() });
+    await api.auth();
+    
+    // Fetch Memory.dashboard and Memory.engine.stats
+    const memory = await api.memory.get('', 'shard3');
+    
+    if (!memory.data || !memory.data.dashboard) {
+      console.error('No dashboard data found in Memory');
+      return null;
+    }
+    
+    const dashboard = memory.data.dashboard;
+    const stats = memory.data.engine?.stats || {};
+    
+    // Process each room
+    for (const roomName in dashboard) {
+      const roomData = dashboard[roomName];
+      const date = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+      
+      // Calculate daily aggregates from stats if available
+      const energyHistory = stats.economy?.totalEnergy || [];
+      const cpuHistory = stats.performance?.cpu || [];
+      
+      const avgEnergy = energyHistory.length > 0
+        ? energyHistory.reduce((sum, s) => sum + s.value, 0) / energyHistory.length
+        : roomData.energy;
+      
+      const avgCpu = cpuHistory.length > 0
+        ? cpuHistory.reduce((sum, s) => sum + s.value, 0) / cpuHistory.length
+        : 0;
+      
+      // Store in Firestore
+      await db.collection('telemetry_daily').doc(`${roomName}_${date}`).set({
+        date: date,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        room: roomName,
+        shard: 'shard3',
+          rcl: roomData.rcl,
+          rclProgress: roomData.rclProgress,
+          rclProgressTotal: roomData.rclProgressTotal,
+          avgEnergy: Math.round(avgEnergy),
+          currentEnergy: roomData.energy,
+          energyCapacity: roomData.energyCapacity,
+          avgCpu: parseFloat(avgCpu.toFixed(2)),
+          structures: roomData.structures,
+          construction: roomData.construction,
+          creepCount: Object.keys(memory.data.creeps || {}).length
+        });
+        
+        console.log(`Collected telemetry for ${roomName} on ${date}`);
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error collecting telemetry:', error);
+      throw error;
+    }
+  });
+
+// ============================================================================
+// SCREEPS API INTEGRATION
+// ============================================================================
+
+/**
+ * Execute Screeps console command
+ * POST /api/screeps/console
+ * Body: { command: string }
+ */
+exports.screepsConsole = functions.https.onRequest(async (req, res) => {
+  return cors(req, res, async () => {
+    try {
+      // Verify authentication
+      const user = await verifyAuth(req);
+      if (!user) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+      
+      if (req.method !== 'POST') {
+        return res.status(405).json({ error: 'Method not allowed' });
+      }
+      
+      const { command } = req.body;
+      if (!command) {
+        return res.status(400).json({ error: 'Command required' });
+      }
+      
+      const screepsToken = await getSecret('SCREEPS_TOKEN');
+      const api = new ScreepsAPI({ token: screepsToken });
+      await api.auth();
+      
+      // Execute console command
+      const result = await api.console(command, 'shard3');
+      
+      // Store in history
+      await db.collection('console_history').add({
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        user: user.uid,
+        command: command,
+        output: result.data?.ok ? 'OK' : result.data?.error || 'Unknown',
+        success: result.data?.ok === 1
+      });
+      
+      res.json({
+        success: result.data?.ok === 1,
+        output: result.data
+      });
+    } catch (error) {
+      console.error('Console command error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+});
+
+/**
+ * Download code from Screeps branch
+ * GET /api/screeps/code?branch=main
+ */
+exports.screepsGetCode = functions.https.onRequest(async (req, res) => {
+  return cors(req, res, async () => {
+    try {
+      const user = await verifyAuth(req);
+      if (!user) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+      
+      const branch = req.query.branch || 'default';
+      
+      const screepsToken = await getSecret('SCREEPS_TOKEN');
+      const api = new ScreepsAPI({ token: screepsToken });
+      await api.auth();
+      
+      // Get code from specified branch
+      const code = await api.code.get(branch, 'shard3');
+      
+      res.json({
+        branch: branch,
+        files: code.data || {}
+      });
+    } catch (error) {
+      console.error('Get code error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+});
+
+/**
+ * Upload code to Screeps branch
+ * POST /api/screeps/code
+ * Body: { branch: string, files: { [filename]: string } }
+ */
+exports.screepsSetCode = functions.https.onRequest(async (req, res) => {
+  return cors(req, res, async () => {
+    try {
+      const user = await verifyAuth(req);
+      if (!user) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+      
+      if (req.method !== 'POST') {
+        return res.status(405).json({ error: 'Method not allowed' });
+      }
+      
+      const { branch, files } = req.body;
+      if (!branch || !files) {
+        return res.status(400).json({ error: 'Branch and files required' });
+      }
+      
+      const screepsToken = await getSecret('SCREEPS_TOKEN');
+      const api = new ScreepsAPI({ token: screepsToken });
+      await api.auth();
+      
+      // Upload code to specified branch
+      const result = await api.code.set(branch, files);
+      
+      res.json({
+        success: result.data?.ok === 1,
+        branch: branch,
+        filesUploaded: Object.keys(files).length
+      });
+    } catch (error) {
+      console.error('Set code error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+});
+
+// ============================================================================
+// AI CHAT INTEGRATION
+// ============================================================================
+
+/**
+ * AI chat with Claude
+ * POST /api/ai/chat
+ * Body: { message: string, context: { files, gameState, docs } }
+ */
+exports.aiChat = functions.https.onRequest(async (req, res) => {
+  return cors(req, res, async () => {
+    try {
+      const user = await verifyAuth(req);
+      if (!user) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+      
+      if (req.method !== 'POST') {
+        return res.status(405).json({ error: 'Method not allowed' });
+      }
+      
+      // Check rate limit
+      const today = new Date().toISOString().split('T')[0];
+      const usageRef = db.collection('ai_usage').doc(`${user.uid}_${today}`);
+      const usageDoc = await usageRef.get();
+      const currentCount = usageDoc.exists ? usageDoc.data().count : 0;
+      
+      if (currentCount >= 50) {
+        return res.status(429).json({ error: 'Daily AI request limit reached (50)' });
+      }
+      
+      const { message, context, sessionId, modelName } = req.body;
+      if (!message) {
+        return res.status(400).json({ error: 'Message required' });
+      }
+      
+      const claudeApiKey = await getSecret('CLAUDE_API_KEY');
+      const anthropic = new Anthropic({ apiKey: claudeApiKey });
+      
+      // Build context for AI
+      const systemPrompt = `You are an expert Screeps AI developer with direct access to the game's codebase.
+You can read files, write files, execute console commands, and query game state.
+Help the user improve their Screeps colony by writing efficient, well-documented code.
+
+Available tools:
+- read_file(filename): Read a file from the current working set
+- write_file(filename, content): Write content to a file
+- execute_console(command): Execute a Screeps console command
+- get_game_state(room): Get current game state for a room
+- search_docs(query): Search Screeps API documentation
+
+Current context:
+${context?.files ? `Files: ${Object.keys(context.files).join(', ')}` : 'No files loaded'}
+${context?.gameState ? `Game State: RCL ${context.gameState.rcl}, Energy: ${context.gameState.energy}` : ''}`;
+      
+      // Call Claude API
+      const response = await anthropic.messages.create({
+        model: modelName || 'claude-sonnet-4-20250514',
+        max_tokens: 4096,
+        system: systemPrompt,
+        messages: [
+          {
+            role: 'user',
+            content: message
+          }
+        ]
+      });
+      
+      const aiResponse = response.content[0].text;
+      
+      // Update usage counter
+      await usageRef.set({
+        userId: user.uid,
+        date: today,
+        count: currentCount + 1,
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+      
+      // Track costs
+      await db.collection('ai_costs').add({
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        userId: user.uid,
+        sessionId: sessionId || null,
+        model: modelName || 'claude-sonnet-4-20250514',
+        inputTokens: response.usage.input_tokens,
+        outputTokens: response.usage.output_tokens,
+        estimatedCost: (response.usage.input_tokens * 0.003 / 1000) + (response.usage.output_tokens * 0.015 / 1000)
+      });
+      
+      res.json({
+        response: aiResponse,
+        usage: response.usage,
+        remainingRequests: 50 - currentCount - 1
+      });
+    } catch (error) {
+      console.error('AI chat error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+});
+
+// ============================================================================
+// GITHUB INTEGRATION
+// ============================================================================
+
+/**
+ * Commit files to GitHub
+ * POST /api/git/commit
+ * Body: { branch: string, files: { [filename]: string }, message: string }
+ */
+exports.gitCommit = functions.https.onRequest(async (req, res) => {
+  return cors(req, res, async () => {
+    try {
+      const user = await verifyAuth(req);
+      if (!user) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+      
+      if (req.method !== 'POST') {
+        return res.status(405).json({ error: 'Method not allowed' });
+      }
+      
+      const { branch, files, message } = req.body;
+      if (!branch || !files || !message) {
+        return res.status(400).json({ error: 'Branch, files, and message required' });
+      }
+      
+      const githubPat = await getSecret('GITHUB_PAT');
+      const octokit = new Octokit({ auth: githubPat });
+      
+      const owner = 'pssnyder';
+      const repo = 'screeps-codebase';
+      
+      // Get the latest commit SHA
+      const { data: ref } = await octokit.git.getRef({
+        owner,
+        repo,
+        ref: `heads/${branch}`
+      });
+      
+      const commitSha = ref.object.sha;
+      const { data: commit } = await octokit.git.getCommit({
+        owner,
+        repo,
+        commit_sha: commitSha
+      });
+      
+      // Create blobs for each file
+      const blobs = await Promise.all(
+        Object.entries(files).map(async ([filename, content]) => {
+          const { data: blob } = await octokit.git.createBlob({
+            owner,
+            repo,
+            content: Buffer.from(content).toString('base64'),
+            encoding: 'base64'
+          });
+          return { path: `default/${filename}`, sha: blob.sha, mode: '100644', type: 'blob' };
+        })
+      );
+      
+      // Create new tree
+      const { data: tree } = await octokit.git.createTree({
+        owner,
+        repo,
+        base_tree: commit.tree.sha,
+        tree: blobs
+      });
+      
+      // Create new commit
+      const { data: newCommit } = await octokit.git.createCommit({
+        owner,
+        repo,
+        message: message,
+        tree: tree.sha,
+        parents: [commitSha]
+      });
+      
+      // Update reference
+      await octokit.git.updateRef({
+        owner,
+        repo,
+        ref: `heads/${branch}`,
+        sha: newCommit.sha
+      });
+      
+      res.json({
+        success: true,
+        commitSha: newCommit.sha,
+        filesCommitted: Object.keys(files).length
+      });
+    } catch (error) {
+      console.error('Git commit error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+});
+
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+
+/**
+ * Get secret from Secret Manager
+ */
+async function getSecret(secretName) {
+  const client = getSecretManagerClient();
+  
+  const projectId = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT;
+  const name = `projects/${projectId}/secrets/${secretName}/versions/latest`;
+  
+  try {
+    const [version] = await client.accessSecretVersion({ name });
+    const payload = version.payload.data.toString('utf8');
+    return payload;
+  } catch (error) {
+    console.error(`Error accessing secret ${secretName}:`, error);
+    throw new Error(`Secret ${secretName} not found`);
+  }
+}
+
+/**
+ * Verify Firebase Auth token
+ */
+async function verifyAuth(req) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return null;
+  }
+  
+  const token = authHeader.split('Bearer ')[1];
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    return decodedToken;
+  } catch (error) {
+    console.error('Auth verification error:', error);
+    return null;
+  }
+}

@@ -1,33 +1,42 @@
 {
   "name": "screeps-mission-control",
-  "version": "1.0.0",
-  "description": "Mission Control dashboard for Screeps - Aviation-inspired HUD with real-time telemetry",
+  "version": "2.0.0",
+  "description": "AI-driven development platform and analytics dashboard for Screeps colonies",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
     "dev": "nodemon server/index.js",
-    "test": "echo \"No tests yet\" && exit 0"
+    "test": "echo \"No tests yet\" && exit 0",
+    "emulators": "firebase emulators:start",
+    "deploy": "firebase deploy",
+    "deploy:hosting": "firebase deploy --only hosting",
+    "deploy:functions": "firebase deploy --only functions",
+    "deploy:firestore": "firebase deploy --only firestore"
   },
   "keywords": [
     "screeps",
     "dashboard",
     "mission-control",
     "telemetry",
-    "hud"
+    "hud",
+    "ai",
+    "analytics"
   ],
-  "author": "Pat Snyder",
+  "author": "Patrick Snyder <pssnyder@rapidtechconsultants.com>",
   "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
     "socket.io": "^4.6.1",
     "screeps-api": "^1.9.0",
     "dotenv": "^16.3.1",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "firebase-admin": "^12.0.0"
   },
   "devDependencies": {
-    "nodemon": "^3.0.1"
+    "nodemon": "^3.0.1",
+    "firebase-tools": "^13.0.0"
   },
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=20.0.0"
   }
 }

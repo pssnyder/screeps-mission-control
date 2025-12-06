@@ -1,0 +1,29 @@
+{
+  "name": "screeps-mission-control-functions",
+  "version": "2.0.0",
+  "description": "Cloud Functions for Screeps Mission Control",
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "serve": "firebase emulators:start --only functions,firestore,auth",
+    "shell": "firebase functions:shell",
+    "start": "npm run shell",
+    "deploy": "firebase deploy --only functions",
+    "logs": "firebase functions:log"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.17.0",
+    "@google-cloud/secret-manager": "^5.0.0",
+    "@octokit/rest": "^20.0.2",
+    "cors": "^2.8.5",
+    "firebase-admin": "^12.0.0",
+    "firebase-functions": "^7.0.0",
+    "screeps-api": "^1.9.0"
+  },
+  "devDependencies": {
+    "firebase-functions-test": "^3.1.0"
+  },
+  "private": true
+}

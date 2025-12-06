@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Colony Management - Screeps Mission Control</title>
+    <link rel="stylesheet" href="css/mission-control.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore-compat.js"></script>
+    <style>
+        .auth-required {
+            display: none;
+        }
+        
+        .auth-prompt {
+            text-align: center;
+            padding: 100px 20px;
+            color: #00ff00;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .auth-form {
+            max-width: 400px;
+            margin: 0 auto;
+            background: #1a1a1a;
+            padding: 30px;
+            border: 2px solid #00ff00;
+            border-radius: 4px;
+        }
+        
+        .auth-form input {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            background: #2a2a2a;
+            border: 1px solid #00ff00;
+            color: #00ff00;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .auth-form button {
+            width: 100%;
+            padding: 12px;
+            margin-top: 10px;
+            background: #00ff00;
+            border: none;
+            color: #000;
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        
+        .auth-form button:hover {
+            background: #00cc00;
+        }
+        
+        .management-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            padding: 20px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        
+        .panel {
+            background: #1a1a1a;
+            border: 2px solid #00ff00;
+            padding: 20px;
+            border-radius: 4px;
+        }
+        
+        .panel-title {
+            color: #00ff00;
+            font-family: 'Courier New', monospace;
+            font-size: 18px;
+            margin-bottom: 15px;
+            border-bottom: 1px solid #00ff00;
+            padding-bottom: 10px;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 15px;
+        }
+        
+        .action-btn {
+            padding: 10px 20px;
+            background: #2a2a2a;
+            border: 1px solid #00ff00;
+            color: #00ff00;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            flex: 1;
+            min-width: 120px;
+        }
+        
+        .action-btn:hover {
+            background: #00ff00;
+            color: #000;
+        }
+        
+        .action-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .output {
+            background: #000;
+            border: 1px solid #00ff00;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            color: #00ff00;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        
+        .config-group {
+            margin-bottom: 20px;
+        }
+        
+        .config-label {
+            color: #00ff00;
+            font-family: 'Courier New', monospace;
+            display: block;
+            margin-bottom: 5px;
+        }
+        
+        select, input[type="range"] {
+            width: 100%;
+            background: #2a2a2a;
+            border: 1px solid #00ff00;
+            color: #00ff00;
+            font-family: 'Courier New', monospace;
+            padding: 5px;
+        }
+        
+        .toggle-group {
+            display: flex;
+            gap: 15px;
+            margin: 10px 0;
+        }
+        
+        .toggle-label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #00ff00;
+            font-family: 'Courier New', monospace;
+        }
+        
+        input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            padding: 5px 15px;
+            background: #2a2a2a;
+            border: 1px solid #00ff00;
+            color: #00ff00;
+            font-family: 'Courier New', monospace;
+            margin: 10px 0;
+        }
+        
+        .status-indicator.active {
+            background: #00ff00;
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+    <!-- Auth Prompt -->
+    <div id="authPrompt" class="auth-prompt">
+        <div class="auth-form">
+            <h2 style="margin-top: 0;">🔐 ADMIN ACCESS REQUIRED</h2>
+            <p>Enter credentials to access Colony Management</p>
+            <input type="email" id="emailInput" placeholder="Email" />
+            <input type="password" id="passwordInput" placeholder="Password" />
+            <button onclick="login()">LOGIN</button>
+            <p id="authError" style="color: #ff0000; margin-top: 10px;"></p>
+        </div>
+    </div>
+    
+    <!-- Main Dashboard (hidden until authenticated) -->
+    <div id="dashboard" class="auth-required">
+        <div style="text-align: center; padding: 20px; background: #1a1a1a; border-bottom: 2px solid #00ff00;">
+            <h1 style="color: #00ff00; font-family: 'Courier New', monospace; margin: 0;">
+                🎮 COLONY MANAGEMENT CONTROL PANEL
+            </h1>
+            <div style="margin-top: 10px;">
+                <span class="status-indicator">Room: W13N57 | Shard: shard3</span>
+                <span class="status-indicator" id="branchIndicator">Active Branch: default</span>
+                <a href="https://screeps.com/a/#!/room/shard3/W13N57" target="_blank" 
+                   style="margin-left: 10px; padding: 5px 15px; background: #00ff00; color: #000; text-decoration: none; font-family: 'Courier New', monospace;">
+                    🎮 Open Game →
+                </a>
+                <button onclick="logout()" style="margin-left: 10px; padding: 5px 15px; background: #ff0000; color: #fff; border: none; cursor: pointer; font-family: 'Courier New', monospace;">
+                    Logout
+                </button>
+            </div>
+        </div>
+        
+        <div class="management-grid">
+            <!-- Status & Commands Panel -->
+            <div class="panel">
+                <div class="panel-title">📊 STATUS & COMMANDS</div>
+                <div class="button-group">
+                    <button class="action-btn" onclick="executeCommand('status()')">Status</button>
+                    <button class="action-btn" onclick="executeCommand('profile()')">Profile</button>
+                    <button class="action-btn" onclick="executeCommand('debug()')">Debug</button>
+                </div>
+                <div class="output" id="commandOutput">
+                    Awaiting commands...
+                </div>
+            </div>
+            
+            <!-- Branch Management Panel -->
+            <div class="panel">
+                <div class="panel-title">🔀 BRANCH MANAGEMENT</div>
+                <div class="config-group">
+                    <label class="config-label">Active Branch:</label>
+                    <select id="branchSelect">
+                        <option value="default">default (Production)</option>
+                        <option value="simulation">simulation (Desktop Testing)</option>
+                        <option value="web-edits">web-edits (Mission Control Edits)</option>
+                    </select>
+                </div>
+                <button class="action-btn" onclick="switchBranch()" style="width: 100%;">
+                    Switch Branch
+                </button>
+                <div class="output" id="branchOutput" style="max-height: 150px; margin-top: 15px;">
+                    Current active branch: default
+                </div>
+            </div>
+            
+            <!-- Config Toggles Panel -->
+            <div class="panel">
+                <div class="panel-title">⚙️ CONFIGURATION</div>
+                
+                <div class="config-group">
+                    <div class="toggle-group">
+                        <label class="toggle-label">
+                            <input type="checkbox" id="autoSpawn" checked>
+                            Auto-Spawn
+                        </label>
+                        <label class="toggle-label">
+                            <input type="checkbox" id="autoPlanning" checked>
+                            Auto-Planning
+                        </label>
+                    </div>
+                </div>
+                
+                <div class="config-group">
+                    <label class="config-label">Posture:</label>
+                    <select id="posture">
+                        <option value="neutral">Neutral</option>
+                        <option value="defensive">Defensive</option>
+                        <option value="offensive">Offensive</option>
+                    </select>
+                </div>
+                
+                <div class="config-group">
+                    <label class="config-label">Tower Repair Threshold: <span id="repairValue">50%</span></label>
+                    <input type="range" id="repairThreshold" min="0" max="100" value="50" 
+                           oninput="document.getElementById('repairValue').textContent = this.value + '%'">
+                </div>
+                
+                <div class="config-group">
+                    <label class="config-label">CPU Limit Warning: <span id="cpuValue">20</span></label>
+                    <input type="range" id="cpuLimit" min="10" max="50" value="20" 
+                           oninput="document.getElementById('cpuValue').textContent = this.value">
+                </div>
+                
+                <button class="action-btn" onclick="saveConfig()" style="width: 100%;">
+                    Save Configuration
+                </button>
+                <div class="output" id="configOutput" style="max-height: 100px; margin-top: 15px;">
+                    Configuration saved successfully
+                </div>
+            </div>
+            
+            <!-- Quick Metrics Panel -->
+            <div class="panel">
+                <div class="panel-title">📈 QUICK METRICS</div>
+                <canvas id="quickChart" style="max-height: 250px;"></canvas>
+                <button class="action-btn" onclick="refreshMetrics()" style="width: 100%; margin-top: 15px;">
+                    Refresh Metrics
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="js/colony-management.js"></script>
+</body>
+</html>
